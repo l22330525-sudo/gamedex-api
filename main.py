@@ -5,7 +5,70 @@ from typing import List, Optional
 import json
 import database  
 
-# Inicialización de la API
+# --- BLOQUE DE CREACIÓN AUTOMÁTICA DE TABLAS ---
+# Este bloque asegura que las tablas existan en Aiven antes de que la API empiece a funcionar
+def crear_tablas_iniciales():
+    try:
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
+        
+        # 1. Tabla de juegos (La que causaba el error 500)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS juegos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                titulo VARCHAR(100) NOT NULL,
+                desarrollador VARCHAR(100),
+                precio DECIMAL(10, 2),
+                clasificacion VARCHAR(10),
+                imagen_url TEXT,
+                generos JSON,
+                plataformas JSON
+            )
+        """)
+        
+        # 2. Tabla de usuarios
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                username VARCHAR(50) UNIQUE,
+                email VARCHAR(100) UNIQUE
+            )
+        """)
+        
+        # 3. Tabla de colecciones
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS colecciones (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                id_usuario INT,
+                id_juego INT,
+                estado VARCHAR(50),
+                horas_jugadas INT DEFAULT 0
+            )
+        """)
+        
+        # 4. Tabla de reseñas
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS resenas (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                id_juego INT,
+                id_usuario INT,
+                puntuacion INT,
+                comentario TEXT
+            )
+        """)
+        
+        conn.commit()
+        print("✅ Verificación de tablas completada con éxito.")
+    except Exception as e:
+        print(f"⚠️ Nota: Verificación de tablas saltada o error menor: {e}")
+    finally:
+        if 'conn' in locals() and conn.is_connected():
+            conn.close()
+
+# Ejecutamos la creación de tablas al cargar el archivo
+crear_tablas_iniciales()
+
+# --- INICIALIZACIÓN DE LA API ---
 app = FastAPI(
     title="GameDex Pro API",
     description="API para gestionar catálogos de videojuegos, usuarios y reseñas.",
@@ -13,7 +76,6 @@ app = FastAPI(
 )
 
 # --- CONFIGURACIÓN DE CORS ---
-# Crucial para que el frontend de tu amigo pueda conectarse desde cualquier lugar
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -59,8 +121,13 @@ def listar_juegos():
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM juegos")
+        
+        # Convertimos los resultados a diccionarios
         columnas = [column[0] for column in cursor.description]
-        datos = [database.fila_a_dict(f) for f in cursor.fetchall()]
+        datos = []
+        for fila in cursor.fetchall():
+            datos.append(dict(zip(columnas, fila)))
+            
         conn.close()
         return {"total": len(datos), "datos": datos}
     except Exception as e:
@@ -76,7 +143,7 @@ def crear_usuario(u: Usuario):
         conn.commit()
         return {"id": cursor.lastrowid, "mensaje": "Usuario creado con éxito"}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"El usuario o email ya existe: {e}")
+        raise HTTPException(status_code=400, detail=f"El usuario o email ya existe o hubo un error: {e}")
     finally:
         conn.close()
 
@@ -156,5 +223,7 @@ def borrar_juego(id_juego: int, x_token: str = Header(None)):
         cursor.execute("DELETE FROM juegos WHERE id = %s", (id_juego,))
         conn.commit()
         return {"mensaje": f"Juego con ID {id_juego} eliminado"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error al borrar: {e}")
     finally:
         conn.close()
