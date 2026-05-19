@@ -12,7 +12,7 @@ def crear_tablas_iniciales():
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         
-        # 1. Tabla de juegos
+        # 1. Tabla de juegos (Catálogo principal)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS juegos (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -26,16 +26,24 @@ def crear_tablas_iniciales():
             )
         """)
         
-        # 2. Tabla de usuarios
+        # 2. Tabla de usuarios (Mejorada con Password para el Login)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 username VARCHAR(50) UNIQUE,
-                email VARCHAR(100) UNIQUE
+                email VARCHAR(100) UNIQUE,
+                password VARCHAR(100) NOT NULL
             )
         """)
         
-        # 3. Tabla de colecciones (Historial del usuario)
+        # Parche de seguridad: Asegurar que password exista si la tabla ya era vieja
+        try:
+            cursor.execute("ALTER TABLE usuarios ADD COLUMN password VARCHAR(100) NOT NULL DEFAULT '12345'")
+            conn.commit()
+        except:
+            pass
+
+        # 3. Tabla de colecciones (Historial personal de cada usuario)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS colecciones (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -47,14 +55,14 @@ def crear_tablas_iniciales():
             )
         """)
         
-        # MEJORA DE COLUMNA: Asegura que fecha_finalizado exista si la tabla es vieja
+        # Parche de seguridad: Asegurar columna fecha_finalizado
         try:
             cursor.execute("ALTER TABLE colecciones ADD COLUMN fecha_finalizado DATE NULL")
             conn.commit()
         except:
             pass
 
-        # 4. Tabla de reseñas
+        # 4. Tabla de reseñas (Comentarios de los jugadores)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS resenas (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -66,18 +74,20 @@ def crear_tablas_iniciales():
         """)
         
         conn.commit()
-        print("✅ Base de Datos estructurada con éxito.")
+        print("✅ Base de Datos estructurada y actualizada con éxito.")
+
     except Exception as e:
-        print(f"❌ Nota en DB: {e}")
+        print(f"❌ Nota en la Base de Datos: {e}")
     finally:
         if 'conn' in locals() and conn.is_connected():
             conn.close()
 
-# Ejecutar creación de tablas al arrancar
+# Ejecutar la creación de tablas al arrancar el servidor
 crear_tablas_iniciales()
 
-app = FastAPI(title="GameDex Pro API - Versión Blindada Final")
+app = FastAPI(title="GameDex Pro API - Sistema de Autenticación Completo")
 
+# Configuración de CORS para permitir conexiones externas (Render, Frontend, etc.)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -86,7 +96,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- MODELOS DE DATOS ---
+# --- MODELOS DE DATOS (SCHEMAS) ---
+
 class Videojuego(BaseModel):
     titulo: str
     desarrollador: str
@@ -96,9 +107,14 @@ class Videojuego(BaseModel):
     plataformas: List[str]
     imagen_url: Optional[str] = None
 
-class Usuario(BaseModel):
+class UsuarioRegistro(BaseModel):
     username: str
     email: str
+    password: str
+
+class UsuarioLogin(BaseModel):
+    email: str
+    password: str
 
 class ColeccionItem(BaseModel):
     id_juego: int
@@ -111,13 +127,60 @@ class ResenaSchema(BaseModel):
     puntuacion: int = Field(..., ge=1, le=5)
     comentario: str
 
-# --- RUTAS DE CLIENTE ---
+# --- RUTAS DE AUTENTICACIÓN (LOGIN Y REGISTRO) ---
+
+@app.post("/api/v1/auth/registrar", tags=["Autenticación"])
+def registrar_usuario(u: UsuarioRegistro):
+    """Permite a un nuevo usuario crear una cuenta con contraseña."""
+    try:
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
+        
+        query = "INSERT INTO usuarios (username, email, password) VALUES (%s, %s, %s)"
+        valores = (u.username, u.email, u.password)
+        
+        cursor.execute(query, valores)
+        conn.commit()
+        
+        return {"id_usuario": cursor.lastrowid, "mensaje": "Usuario registrado exitosamente"}
+    except Exception:
+        raise HTTPException(status_code=400, detail="El nombre de usuario o email ya están registrados")
+    finally:
+        if 'conn' in locals(): conn.close()
+
+@app.post("/api/v1/auth/login", tags=["Autenticación"])
+def login(credenciales: UsuarioLogin):
+    """Verifica el correo y contraseña para permitir el ingreso."""
+    try:
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
+        
+        query = "SELECT id, username, email FROM usuarios WHERE email = %s AND password = %s"
+        cursor.execute(query, (credenciales.email, credenciales.password))
+        resultado = cursor.fetchone()
+        
+        if resultado:
+            return {
+                "mensaje": "Inicio de sesión exitoso",
+                "usuario": {
+                    "id": resultado[0], 
+                    "username": resultado[1], 
+                    "email": resultado[2]
+                }
+            }
+        else:
+            raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+    finally:
+        if 'conn' in locals(): conn.close()
+
+# --- RUTAS DE CLIENTE (CATÁLOGO Y COLECCIÓN) ---
 
 @app.get("/api/v1/juegos", tags=["Cliente"])
 def listar_juegos(genero: Optional[str] = Query(None, description="Filtrar por género")):
     try:
         conn = database.obtener_conexion()
         cursor = conn.cursor()
+        
         if genero:
             cursor.execute("SELECT * FROM juegos WHERE JSON_CONTAINS(generos, %s)", (json.dumps(genero),))
         else:
@@ -125,9 +188,10 @@ def listar_juegos(genero: Optional[str] = Query(None, description="Filtrar por g
         
         columnas = [column[0] for column in cursor.description]
         datos = [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
-        return {"total": len(datos), "datos": datos}
+        
+        return {"total_juegos": len(datos), "datos": datos}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al conectar con DB: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error en DB: {str(e)}")
     finally:
         if 'conn' in locals(): conn.close()
 
@@ -136,6 +200,7 @@ def ver_coleccion(id_user: int):
     try:
         conn = database.obtener_conexion()
         cursor = conn.cursor()
+        
         query = """
             SELECT j.id as id_juego, j.titulo, c.estado, c.horas_jugadas, c.fecha_finalizado
             FROM colecciones c
@@ -143,24 +208,11 @@ def ver_coleccion(id_user: int):
             WHERE c.id_usuario = %s
         """
         cursor.execute(query, (id_user,))
+        
         columnas = [column[0] for column in cursor.description]
         datos = [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
-        return {"usuario_id": id_user, "total_en_coleccion": len(datos), "datos": datos}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al consultar colección: {str(e)}")
-    finally:
-        if 'conn' in locals(): conn.close()
-
-@app.post("/api/v1/usuarios", tags=["Cliente"])
-def crear_usuario(u: Usuario):
-    try:
-        conn = database.obtener_conexion()
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO usuarios (username, email) VALUES (%s, %s)", (u.username, u.email))
-        conn.commit()
-        return {"id_usuario": cursor.lastrowid, "mensaje": "Perfil creado"}
-    except Exception:
-        raise HTTPException(status_code=400, detail="El usuario o email ya existe")
+        
+        return {"usuario_id": id_user, "total_items": len(datos), "datos": datos}
     finally:
         if 'conn' in locals(): conn.close()
 
@@ -170,20 +222,21 @@ def agregar_coleccion(id_user: int, item: ColeccionItem):
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         
-        # VALIDACIÓN: ¿Existe el juego?
+        # Validar si el juego existe antes de añadirlo
         cursor.execute("SELECT id FROM juegos WHERE id = %s", (item.id_juego,))
         if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail=f"El juego con ID {item.id_juego} no existe.")
+            raise HTTPException(status_code=404, detail=f"El juego {item.id_juego} no existe.")
 
-        cursor.execute(
-            "INSERT INTO colecciones (id_usuario, id_juego, estado, horas_jugadas, fecha_finalizado) VALUES (%s, %s, %s, %s, %s)",
-            (id_user, item.id_juego, item.estado, item.horas_jugadas, item.fecha_finalizado)
-        )
+        query = """
+            INSERT INTO colecciones (id_usuario, id_juego, estado, horas_jugadas, fecha_finalizado) 
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        valores = (id_user, item.id_juego, item.estado, item.horas_jugadas, item.fecha_finalizado)
+        
+        cursor.execute(query, valores)
         conn.commit()
-        return {"mensaje": f"Juego añadido a la colección del usuario {id_user}"}
-    except HTTPException as he: raise he
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al guardar en colección: {str(e)}")
+        
+        return {"mensaje": "Juego añadido correctamente a tu colección"}
     finally:
         if 'conn' in locals(): conn.close()
 
@@ -195,17 +248,18 @@ def dejar_resena(id_juego: int, r: ResenaSchema):
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         
-        # Verificar si el juego existe
+        # Verificar si el juego existe para poder reseñarlo
         cursor.execute("SELECT id FROM juegos WHERE id = %s", (id_juego,))
         if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Juego no encontrado para reseñar")
+            raise HTTPException(status_code=404, detail="No se puede reseñar un juego que no existe")
 
         query = "INSERT INTO resenas (id_juego, id_usuario, puntuacion, comentario) VALUES (%s, %s, %s, %s)"
-        cursor.execute(query, (id_juego, r.id_usuario, r.puntuacion, r.comentario))
+        valores = (id_juego, r.id_usuario, r.puntuacion, r.comentario)
+        
+        cursor.execute(query, valores)
         conn.commit()
-        return {"mensaje": "Reseña publicada con éxito"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        
+        return {"mensaje": "¡Reseña publicada con éxito!"}
     finally:
         if 'conn' in locals(): conn.close()
 
@@ -214,13 +268,13 @@ def ver_resenas(id_juego: int):
     try:
         conn = database.obtener_conexion()
         cursor = conn.cursor()
+        
         cursor.execute("SELECT * FROM resenas WHERE id_juego = %s", (id_juego,))
         
         columnas = [column[0] for column in cursor.description]
         datos = [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
+        
         return datos
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
     finally:
         if 'conn' in locals(): conn.close()
 
@@ -231,25 +285,23 @@ def obtener_estadisticas_usuario(id_user: int):
     try:
         conn = database.obtener_conexion()
         cursor = conn.cursor()
+        
         query = """
-            SELECT 
-                COALESCE(SUM(horas_jugadas), 0) as total_horas, 
-                COUNT(CASE WHEN estado = 'completado' THEN 1 END) as juegos_terminados
+            SELECT COALESCE(SUM(horas_jugadas), 0), COUNT(*) 
             FROM colecciones WHERE id_usuario = %s
         """
         cursor.execute(query, (id_user,))
         res = cursor.fetchone()
+        
         return {
-            "id_usuario": id_user,
-            "horas_totales": res[0],
-            "juegos_completados": res[1]
+            "id_usuario": id_user, 
+            "horas_totales_jugadas": res[0], 
+            "juegos_en_coleccion": res[1]
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
     finally:
         if 'conn' in locals(): conn.close()
 
-# --- ADMINISTRACIÓN ---
+# --- ADMINISTRACIÓN (ACCESO RESTRINGIDO CON TOKEN) ---
 
 @app.post("/api/v1/admin/juegos", tags=["Admin"])
 def registrar_juego(juego: Videojuego, x_token: str = Header(None)):
@@ -258,19 +310,21 @@ def registrar_juego(juego: Videojuego, x_token: str = Header(None)):
     try:
         conn = database.obtener_conexion()
         cursor = conn.cursor()
+        
         query = """
             INSERT INTO juegos (titulo, desarrollador, precio, clasificacion, imagen_url, generos, plataformas) 
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
-        cursor.execute(query, (
+        valores = (
             juego.titulo, juego.desarrollador, juego.precio, 
             juego.clasificacion, juego.imagen_url, 
             json.dumps(juego.generos), json.dumps(juego.plataformas)
-        ))
+        )
+        
+        cursor.execute(query, valores)
         conn.commit()
-        return {"id": cursor.lastrowid, "mensaje": "Juego registrado exitosamente"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al registrar: {str(e)}")
+        
+        return {"id_nuevo_juego": cursor.lastrowid, "mensaje": "Juego dado de alta exitosamente"}
     finally:
         if 'conn' in locals(): conn.close()
 
@@ -281,10 +335,10 @@ def borrar_juego(id_juego: int, x_token: str = Header(None)):
     try:
         conn = database.obtener_conexion()
         cursor = conn.cursor()
+        
         cursor.execute("DELETE FROM juegos WHERE id = %s", (id_juego,))
         conn.commit()
-        return {"mensaje": f"Juego {id_juego} eliminado"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        
+        return {"mensaje": f"El juego con ID {id_juego} ha sido eliminado del catálogo"}
     finally:
         if 'conn' in locals(): conn.close()
