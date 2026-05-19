@@ -12,7 +12,7 @@ def crear_tablas_iniciales():
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         
-        # Tabla de juegos
+        # 1. Tabla de juegos
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS juegos (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -26,7 +26,7 @@ def crear_tablas_iniciales():
             )
         """)
         
-        # Tabla de usuarios
+        # 2. Tabla de usuarios
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -35,7 +35,7 @@ def crear_tablas_iniciales():
             )
         """)
         
-        # Tabla de colecciones (Historial del usuario)
+        # 3. Tabla de colecciones
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS colecciones (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -47,7 +47,15 @@ def crear_tablas_iniciales():
             )
         """)
         
-        # Tabla de reseñas
+        # --- MEJORA CRÍTICA: Asegurar que la columna existe si la tabla ya existía ---
+        try:
+            cursor.execute("ALTER TABLE colecciones ADD COLUMN fecha_finalizado DATE NULL")
+            conn.commit()
+        except:
+            # Si ya existe la columna, MySQL lanzará un error que ignoramos aquí
+            pass
+
+        # 4. Tabla de reseñas
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS resenas (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -59,7 +67,7 @@ def crear_tablas_iniciales():
         """)
         
         conn.commit()
-        print("✅ Base de Datos estructurada con éxito.")
+        print("✅ Base de Datos estructurada y actualizada con éxito.")
     except Exception as e:
         print(f"❌ Nota en DB: {e}")
     finally:
@@ -129,7 +137,6 @@ def ver_coleccion(id_user: int):
     try:
         conn = database.obtener_conexion()
         cursor = conn.cursor()
-        # Usamos JOIN para traer el nombre del juego real
         query = """
             SELECT j.id as id_juego, j.titulo, c.estado, c.horas_jugadas, c.fecha_finalizado
             FROM colecciones c
@@ -164,7 +171,6 @@ def agregar_coleccion(id_user: int, item: ColeccionItem):
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         
-        # VALIDACIÓN: ¿Existe el juego? (Evita el Error 500 por IDs falsos)
         cursor.execute("SELECT id FROM juegos WHERE id = %s", (item.id_juego,))
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail=f"El juego con ID {item.id_juego} no existe en el catálogo.")
@@ -201,6 +207,8 @@ def obtener_estadisticas_usuario(id_user: int):
             "horas_totales": res[0],
             "juegos_completados": res[1]
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         if 'conn' in locals(): conn.close()
 
@@ -239,5 +247,7 @@ def borrar_juego(id_juego: int, x_token: str = Header(None)):
         cursor.execute("DELETE FROM juegos WHERE id = %s", (id_juego,))
         conn.commit()
         return {"mensaje": f"Juego {id_juego} eliminado"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         if 'conn' in locals(): conn.close()
