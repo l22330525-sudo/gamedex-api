@@ -12,6 +12,7 @@ def crear_tablas_iniciales():
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         
+        # Tabla de juegos
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS juegos (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -25,6 +26,7 @@ def crear_tablas_iniciales():
             )
         """)
         
+        # Tabla de usuarios
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -33,7 +35,7 @@ def crear_tablas_iniciales():
             )
         """)
         
-        # Agregamos 'fecha_finalizado' para el historial del cliente
+        # Tabla de colecciones (Historial del usuario)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS colecciones (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -45,6 +47,7 @@ def crear_tablas_iniciales():
             )
         """)
         
+        # Tabla de reseñas
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS resenas (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -56,16 +59,17 @@ def crear_tablas_iniciales():
         """)
         
         conn.commit()
-        print(" Base de Datos estructurada con éxito.")
+        print("✅ Base de Datos estructurada con éxito.")
     except Exception as e:
-        print(f" Nota en DB: {e}")
+        print(f"❌ Nota en DB: {e}")
     finally:
         if 'conn' in locals() and conn.is_connected():
             conn.close()
 
+# Ejecutar creación de tablas al arrancar
 crear_tablas_iniciales()
 
-app = FastAPI(title="GameDex Pro API - Full Version")
+app = FastAPI(title="GameDex Pro API - Versión Blindada")
 
 app.add_middleware(
     CORSMiddleware,
@@ -100,16 +104,14 @@ class ResenaSchema(BaseModel):
     puntuacion: int = Field(..., ge=1, le=5)
     comentario: str
 
-# --- RUTAS DE CLIENTE (MEJORADAS) ---
+# --- RUTAS DE CLIENTE ---
 
 @app.get("/api/v1/juegos", tags=["Cliente"])
 def listar_juegos(genero: Optional[str] = Query(None, description="Filtrar por género")):
-    """Retorna juegos. Opcionalmente filtra por género (ej. /juegos?genero=Accion)"""
-    conn = database.obtener_conexion()
-    cursor = conn.cursor()
     try:
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
         if genero:
-            # Buscamos dentro del campo JSON de géneros
             cursor.execute("SELECT * FROM juegos WHERE JSON_CONTAINS(generos, %s)", (json.dumps(genero),))
         else:
             cursor.execute("SELECT * FROM juegos")
@@ -117,123 +119,125 @@ def listar_juegos(genero: Optional[str] = Query(None, description="Filtrar por g
         columnas = [column[0] for column in cursor.description]
         datos = [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
         return {"total": len(datos), "datos": datos}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al conectar con DB: {str(e)}")
     finally:
-        conn.close()
-
-@app.get("/api/v1/juegos/top", tags=["Estadísticas"])
-def obtener_top_juegos():
-    """Devuelve los 5 juegos con mejor puntuación promedio"""
-    conn = database.obtener_conexion()
-    cursor = conn.cursor()
-    query = """
-        SELECT j.id, j.titulo, AVG(r.puntuacion) as promedio, COUNT(r.id) as total_resenas
-        FROM juegos j
-        JOIN resenas r ON j.id = r.id_juego
-        GROUP BY j.id
-        ORDER BY promedio DESC
-        LIMIT 5
-    """
-    cursor.execute(query)
-    columnas = [column[0] for column in cursor.description]
-    datos = [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
-    conn.close()
-    return {"top_mejor_valorados": datos}
-
-@app.get("/api/v1/usuarios/{id_user}/stats", tags=["Estadísticas"])
-def obtener_estadisticas_usuario(id_user: int):
-    """Calcula total de horas y juegos terminados de un usuario"""
-    conn = database.obtener_conexion()
-    cursor = conn.cursor()
-    query = """
-        SELECT 
-            SUM(horas_jugadas) as total_horas, 
-            COUNT(CASE WHEN estado = 'completado' THEN 1 END) as juegos_terminados
-        FROM colecciones WHERE id_usuario = %s
-    """
-    cursor.execute(query, (id_user,))
-    res = cursor.fetchone()
-    conn.close()
-    return {
-        "id_usuario": id_user,
-        "horas_totales_vida": res[0] if res[0] else 0,
-        "medallas_completado": res[1]
-    }
+        if 'conn' in locals(): conn.close()
 
 @app.get("/api/v1/usuarios/{id_user}/coleccion", tags=["Cliente"])
 def ver_coleccion(id_user: int):
-    """Muestra la lista personal del usuario con detalles del juego"""
-    conn = database.obtener_conexion()
-    cursor = conn.cursor()
-    query = """
-        SELECT j.titulo, c.estado, c.horas_jugadas, c.fecha_finalizado
-        FROM colecciones c
-        JOIN juegos j ON c.id_juego = j.id
-        WHERE c.id_usuario = %s
-    """
-    cursor.execute(query, (id_user,))
-    columnas = [column[0] for column in cursor.description]
-    datos = [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
-    conn.close()
-    return {"usuario_id": id_user, "coleccion": datos}
-
-# --- RUTAS DE REGISTRO BÁSICAS ---
+    try:
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
+        # Usamos JOIN para traer el nombre del juego real
+        query = """
+            SELECT j.id as id_juego, j.titulo, c.estado, c.horas_jugadas, c.fecha_finalizado
+            FROM colecciones c
+            JOIN juegos j ON c.id_juego = j.id
+            WHERE c.id_usuario = %s
+        """
+        cursor.execute(query, (id_user,))
+        columnas = [column[0] for column in cursor.description]
+        datos = [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
+        return {"usuario_id": id_user, "total_en_coleccion": len(datos), "datos": datos}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al consultar colección: {str(e)}")
+    finally:
+        if 'conn' in locals(): conn.close()
 
 @app.post("/api/v1/usuarios", tags=["Cliente"])
 def crear_usuario(u: Usuario):
-    conn = database.obtener_conexion()
-    cursor = conn.cursor()
     try:
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
         cursor.execute("INSERT INTO usuarios (username, email) VALUES (%s, %s)", (u.username, u.email))
         conn.commit()
         return {"id_usuario": cursor.lastrowid, "mensaje": "Perfil creado"}
-    except: raise HTTPException(status_code=400, detail="El usuario ya existe")
-    finally: conn.close()
+    except Exception:
+        raise HTTPException(status_code=400, detail="El usuario o email ya existe")
+    finally:
+        if 'conn' in locals(): conn.close()
 
 @app.post("/api/v1/usuarios/{id_user}/coleccion", tags=["Cliente"])
 def agregar_coleccion(id_user: int, item: ColeccionItem):
-    conn = database.obtener_conexion()
-    cursor = conn.cursor()
     try:
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
+        
+        # VALIDACIÓN: ¿Existe el juego? (Evita el Error 500 por IDs falsos)
+        cursor.execute("SELECT id FROM juegos WHERE id = %s", (item.id_juego,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail=f"El juego con ID {item.id_juego} no existe en el catálogo.")
+
         cursor.execute(
             "INSERT INTO colecciones (id_usuario, id_juego, estado, horas_jugadas, fecha_finalizado) VALUES (%s, %s, %s, %s, %s)",
             (id_user, item.id_juego, item.estado, item.horas_jugadas, item.fecha_finalizado)
         )
         conn.commit()
-        return {"mensaje": f"Juego actualizado a {item.estado}"}
-    finally: conn.close()
+        return {"mensaje": f"Juego añadido a la colección del usuario {id_user}"}
+    except HTTPException as he: raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al guardar en colección: {str(e)}")
+    finally:
+        if 'conn' in locals(): conn.close()
 
-@app.post("/api/v1/juegos/{id_juego}/resenas", tags=["Cliente"])
-def dejar_resena(id_juego: int, r: ResenaSchema):
-    conn = database.obtener_conexion()
-    cursor = conn.cursor()
+# --- ESTADÍSTICAS ---
+
+@app.get("/api/v1/usuarios/{id_user}/stats", tags=["Estadísticas"])
+def obtener_estadisticas_usuario(id_user: int):
     try:
-        cursor.execute("INSERT INTO resenas (id_juego, id_usuario, puntuacion, comentario) VALUES (%s, %s, %s, %s)",
-                       (id_juego, r.id_usuario, r.puntuacion, r.comentario))
-        conn.commit()
-        return {"mensaje": "Reseña guardada"}
-    finally: conn.close()
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
+        query = """
+            SELECT 
+                COALESCE(SUM(horas_jugadas), 0) as total_horas, 
+                COUNT(CASE WHEN estado = 'completado' THEN 1 END) as juegos_terminados
+            FROM colecciones WHERE id_usuario = %s
+        """
+        cursor.execute(query, (id_user,))
+        res = cursor.fetchone()
+        return {
+            "id_usuario": id_user,
+            "horas_totales": res[0],
+            "juegos_completados": res[1]
+        }
+    finally:
+        if 'conn' in locals(): conn.close()
 
-# --- RUTAS DE ADMINISTRACIÓN ---
+# --- ADMINISTRACIÓN ---
 
 @app.post("/api/v1/admin/juegos", tags=["Admin"])
 def registrar_juego(juego: Videojuego, x_token: str = Header(None)):
     if x_token != "secret-admin-key":
-        raise HTTPException(status_code=403, detail="Sin permiso")
-    conn = database.obtener_conexion()
-    cursor = conn.cursor()
+        raise HTTPException(status_code=403, detail="Token de administrador no válido")
     try:
-        query = "INSERT INTO juegos (titulo, desarrollador, precio, clasificacion, imagen_url, generos, plataformas) VALUES (%s,%s,%s,%s,%s,%s,%s)"
-        cursor.execute(query, (juego.titulo, juego.desarrollador, juego.precio, juego.clasificacion, juego.imagen_url, json.dumps(juego.generos), json.dumps(juego.plataformas)))
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
+        query = """
+            INSERT INTO juegos (titulo, desarrollador, precio, clasificacion, imagen_url, generos, plataformas) 
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+        """
+        cursor.execute(query, (
+            juego.titulo, juego.desarrollador, juego.precio, 
+            juego.clasificacion, juego.imagen_url, 
+            json.dumps(juego.generos), json.dumps(juego.plataformas)
+        ))
         conn.commit()
-        return {"id": cursor.lastrowid, "mensaje": "Catálogo actualizado"}
-    finally: conn.close()
+        return {"id": cursor.lastrowid, "mensaje": "Juego registrado exitosamente"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al registrar: {str(e)}")
+    finally:
+        if 'conn' in locals(): conn.close()
 
 @app.delete("/api/v1/admin/juegos/{id_juego}", tags=["Admin"])
 def borrar_juego(id_juego: int, x_token: str = Header(None)):
-    if x_token != "secret-admin-key": raise HTTPException(status_code=403, detail="Denegado")
-    conn = database.obtener_conexion()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM juegos WHERE id = %s", (id_juego,))
-    conn.commit()
-    conn.close()
-    return {"mensaje": "Juego eliminado"}
+    if x_token != "secret-admin-key":
+        raise HTTPException(status_code=403, detail="Acceso denegado")
+    try:
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM juegos WHERE id = %s", (id_juego,))
+        conn.commit()
+        return {"mensaje": f"Juego {id_juego} eliminado"}
+    finally:
+        if 'conn' in locals(): conn.close()
