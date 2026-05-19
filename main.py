@@ -35,7 +35,7 @@ def crear_tablas_iniciales():
             )
         """)
         
-        # 3. Tabla de colecciones
+        # 3. Tabla de colecciones (Historial del usuario)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS colecciones (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -47,12 +47,11 @@ def crear_tablas_iniciales():
             )
         """)
         
-        # --- MEJORA CRÍTICA: Asegurar que la columna existe si la tabla ya existía ---
+        # MEJORA DE COLUMNA: Asegura que fecha_finalizado exista si la tabla es vieja
         try:
             cursor.execute("ALTER TABLE colecciones ADD COLUMN fecha_finalizado DATE NULL")
             conn.commit()
         except:
-            # Si ya existe la columna, MySQL lanzará un error que ignoramos aquí
             pass
 
         # 4. Tabla de reseñas
@@ -67,7 +66,7 @@ def crear_tablas_iniciales():
         """)
         
         conn.commit()
-        print("✅ Base de Datos estructurada y actualizada con éxito.")
+        print("✅ Base de Datos estructurada con éxito.")
     except Exception as e:
         print(f"❌ Nota en DB: {e}")
     finally:
@@ -77,7 +76,7 @@ def crear_tablas_iniciales():
 # Ejecutar creación de tablas al arrancar
 crear_tablas_iniciales()
 
-app = FastAPI(title="GameDex Pro API - Versión Blindada")
+app = FastAPI(title="GameDex Pro API - Versión Blindada Final")
 
 app.add_middleware(
     CORSMiddleware,
@@ -171,9 +170,10 @@ def agregar_coleccion(id_user: int, item: ColeccionItem):
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         
+        # VALIDACIÓN: ¿Existe el juego?
         cursor.execute("SELECT id FROM juegos WHERE id = %s", (item.id_juego,))
         if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail=f"El juego con ID {item.id_juego} no existe en el catálogo.")
+            raise HTTPException(status_code=404, detail=f"El juego con ID {item.id_juego} no existe.")
 
         cursor.execute(
             "INSERT INTO colecciones (id_usuario, id_juego, estado, horas_jugadas, fecha_finalizado) VALUES (%s, %s, %s, %s, %s)",
@@ -184,6 +184,43 @@ def agregar_coleccion(id_user: int, item: ColeccionItem):
     except HTTPException as he: raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al guardar en colección: {str(e)}")
+    finally:
+        if 'conn' in locals(): conn.close()
+
+# --- RUTAS DE RESEÑAS ---
+
+@app.post("/api/v1/juegos/{id_juego}/resenas", tags=["Reseñas"])
+def dejar_resena(id_juego: int, r: ResenaSchema):
+    try:
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
+        
+        # Verificar si el juego existe
+        cursor.execute("SELECT id FROM juegos WHERE id = %s", (id_juego,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Juego no encontrado para reseñar")
+
+        query = "INSERT INTO resenas (id_juego, id_usuario, puntuacion, comentario) VALUES (%s, %s, %s, %s)"
+        cursor.execute(query, (id_juego, r.id_usuario, r.puntuacion, r.comentario))
+        conn.commit()
+        return {"mensaje": "Reseña publicada con éxito"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if 'conn' in locals(): conn.close()
+
+@app.get("/api/v1/juegos/{id_juego}/resenas", tags=["Reseñas"])
+def ver_resenas(id_juego: int):
+    try:
+        conn = database.obtener_conexion()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM resenas WHERE id_juego = %s", (id_juego,))
+        
+        columnas = [column[0] for column in cursor.description]
+        datos = [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
+        return datos
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         if 'conn' in locals(): conn.close()
 
