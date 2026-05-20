@@ -271,6 +271,38 @@ def listar_juegos_disponibles(genero: Optional[str] = Query(None)):
 # --- SECCIÓN: GESTIÓN DE COLECCIÓN PERSONAL ---
 # =================================================================
 
+@app.get("/api/v1/usuarios/{id_user}/coleccion", tags=["Cliente"])
+def ver_coleccion_completa(id_user: Any):
+    """
+    Obtiene todos los juegos que el usuario tiene guardados en su bóveda.
+    """
+    try:
+        u_id = int(id_user)
+        conexion = database.obtener_conexion()
+        cursor = conexion.cursor()
+        
+        # Unimos la tabla colecciones con juegos para traer los títulos
+        consulta_sql = """
+            SELECT j.id, j.titulo, c.estado, c.horas_jugadas
+            FROM colecciones c
+            JOIN juegos j ON c.id_juego = j.id
+            WHERE c.id_usuario = %s
+        """
+        cursor.execute(consulta_sql, (u_id,))
+        
+        columnas = [col[0] for col in cursor.description]
+        datos = [dict(zip(columnas, f)) for f in cursor.fetchall()]
+        
+        return {
+            "usuario_id": u_id,
+            "total_juegos": len(datos),
+            "juegos": datos
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Error al obtener la colección.")
+    finally:
+        if 'conexion' in locals(): conexion.close()
+
 @app.post("/api/v1/usuarios/{id_user}/coleccion", tags=["Cliente"])
 def gestionar_juego_en_coleccion(id_user: Any, item: ColeccionItem):
     """
