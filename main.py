@@ -43,25 +43,17 @@ def crear_tablas_iniciales():
         except:
             pass
 
-        # 3. Tabla de colecciones (Historial personal de cada usuario)
+        # 3. Tabla de colecciones (Sin el campo de fecha de finalización)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS colecciones (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 id_usuario INT,
                 id_juego INT,
                 estado VARCHAR(50),
-                horas_jugadas INT DEFAULT 0,
-                fecha_finalizado DATE NULL
+                horas_jugadas INT DEFAULT 0
             )
         """)
         
-        # Parche de seguridad: Asegurar columna fecha_finalizado
-        try:
-            cursor.execute("ALTER TABLE colecciones ADD COLUMN fecha_finalizado DATE NULL")
-            conn.commit()
-        except:
-            pass
-
         # 4. Tabla de reseñas (Comentarios de los jugadores)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS resenas (
@@ -74,7 +66,7 @@ def crear_tablas_iniciales():
         """)
         
         conn.commit()
-        print("✅ Base de Datos estructurada y actualizada con éxito.")
+        print("✅ Base de Datos estructurada y actualizada con éxito (Sin Fechas).")
 
     except Exception as e:
         print(f"❌ Nota en la Base de Datos: {e}")
@@ -87,7 +79,7 @@ crear_tablas_iniciales()
 
 app = FastAPI(title="GameDex Pro API - Sistema de Autenticación Completo")
 
-# Configuración de CORS para permitir conexiones externas (Render, Frontend, etc.)
+# Configuración de CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -120,7 +112,7 @@ class ColeccionItem(BaseModel):
     id_juego: int
     estado: str 
     horas_jugadas: int = 0
-    fecha_finalizado: Optional[date] = None
+    # Se eliminó fecha_finalizado de aquí
 
 class ResenaSchema(BaseModel):
     id_usuario: int
@@ -201,8 +193,9 @@ def ver_coleccion(id_user: int):
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         
+        # Query actualizado: ya no selecciona fecha_finalizado
         query = """
-            SELECT j.id as id_juego, j.titulo, c.estado, c.horas_jugadas, c.fecha_finalizado
+            SELECT j.id as id_juego, j.titulo, c.estado, c.horas_jugadas
             FROM colecciones c
             JOIN juegos j ON c.id_juego = j.id
             WHERE c.id_usuario = %s
@@ -222,16 +215,16 @@ def agregar_coleccion(id_user: int, item: ColeccionItem):
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         
-        # Validar si el juego existe antes de añadirlo
         cursor.execute("SELECT id FROM juegos WHERE id = %s", (item.id_juego,))
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail=f"El juego {item.id_juego} no existe.")
 
+        # Query actualizado: ya no inserta fecha_finalizado
         query = """
-            INSERT INTO colecciones (id_usuario, id_juego, estado, horas_jugadas, fecha_finalizado) 
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO colecciones (id_usuario, id_juego, estado, horas_jugadas) 
+            VALUES (%s, %s, %s, %s)
         """
-        valores = (id_user, item.id_juego, item.estado, item.horas_jugadas, item.fecha_finalizado)
+        valores = (id_user, item.id_juego, item.estado, item.horas_jugadas)
         
         cursor.execute(query, valores)
         conn.commit()
@@ -248,7 +241,6 @@ def dejar_resena(id_juego: int, r: ResenaSchema):
         conn = database.obtener_conexion()
         cursor = conn.cursor()
         
-        # Verificar si el juego existe para poder reseñarlo
         cursor.execute("SELECT id FROM juegos WHERE id = %s", (id_juego,))
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="No se puede reseñar un juego que no existe")
@@ -301,7 +293,7 @@ def obtener_estadisticas_usuario(id_user: int):
     finally:
         if 'conn' in locals(): conn.close()
 
-# --- ADMINISTRACIÓN (ACCESO RESTRINGIDO CON TOKEN) ---
+# --- ADMINISTRACIÓN ---
 
 @app.post("/api/v1/admin/juegos", tags=["Admin"])
 def registrar_juego(juego: Videojuego, x_token: str = Header(None)):
